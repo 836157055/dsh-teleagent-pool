@@ -103,6 +103,32 @@ function readJson(file) {
   }
 }
 
+/**
+ * 从 JWT 的 `exp` 解出有效期（毫秒时间戳）。
+ *
+ * ⚠️ AutoClaw 的 accessToken 是**标准三段 JWT**（实测 `exp` 约 30 天），
+ * 与 TeleAgent 的 `tenant:jwt` 形态不同（那个要先去前缀）。这里两种都容错：
+ * 带 `xxx:` 前缀就剥掉，否则直接用。
+ *
+ * 解不出来返回 `undefined` —— 界面显示「未知」，**不编造日期**。
+ */
+export function decodeJwtExpMs(token) {
+  const raw = typeof token === 'string' ? token.trim() : ''
+  if (raw.length === 0) return undefined
+  const body = raw.includes(':') ? raw.slice(raw.indexOf(':') + 1) : raw
+  const segments = body.split('.')
+  if (segments.length !== 3 || segments[1] === undefined) return undefined
+  try {
+    const payload = JSON.parse(Buffer.from(segments[1], 'base64url').toString('utf8'))
+    const exp = payload?.exp
+    if (typeof exp !== 'number' || !Number.isFinite(exp)) return undefined
+    const ms = exp * 1000
+    return Number.isFinite(ms) && ms > 0 ? ms : undefined
+  } catch {
+    return undefined
+  }
+}
+
 /** DPAPI 解主密钥（仅 Windows；用 PowerShell 做一次 Base64 往返）。 */
 function unprotectMasterKey(encryptedKeyBase64, timeoutMs = 15_000) {
   if (process.platform !== 'win32') {
@@ -238,14 +264,23 @@ export async function listLocalAccounts(options = {}) {
     const credential = masterKey === undefined
       ? undefined
       : decryptCredentialFile(masterKey, path.join(accountsDir, accountKey, CREDENTIAL_FILE))
+    const token = credential?.accessToken ?? ''
     out.push({
       accountKey,
       accountId,
       phone: typeof profile?.phone === 'string' ? profile.phone : '',
       numericUserId: typeof profile?.numericUserId === 'number' ? profile.numericUserId : 0,
-      token: credential?.accessToken ?? '',
+      token,
       refreshToken: credential?.refreshToken ?? '',
       hasCredential: credential !== undefined,
+      /**
+       * 凭据有效期（毫秒时间戳），从 JWT 的 `exp` 解出。
+       *
+       * 实测 AutoClaw 的 accessToken 是标准 JWT（`exp` 约 30 天），
+       * 但**签发时不带本地缓存**，所以每次都现解 —— 解不出来就是 `null`，
+       * 界面显示「未知」而不是编一个日期。
+       */
+      expiresAt: decodeJwtExpMs(token) ?? null,
       active: activeAccountId !== '' && accountId === activeAccountId,
     })
   }

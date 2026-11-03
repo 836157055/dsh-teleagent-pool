@@ -110,6 +110,63 @@ window.__ModuleLoader__.load({
       return row.id
     }
 
+    /**
+     * 凭据有效期标签。**过期就红字**，快到期给个提醒档。
+     *
+     * 四档判定：
+     * | 剩余 | 显示 | 样式 |
+     * |---|---|---|
+     * | `<= 0` | `凭据已过期` | 红字（`tap-err`） |
+     * | `< 2 天` | `凭据 1 天后过期` | 红字（快过期也是要处理的事） |
+     * | `< 7 天` | `凭据 5 天后过期` | 普通 tag |
+     * | 其余 | `凭据 2026/12/01` | 淡色 tag |
+     * | 解不出 | `凭据有效期未知` | 淡色（**不当成有效**） |
+     */
+    function credentialTag(account, isAuto) {
+      var expiresAt = account && account.expiresAt
+      var valid = typeof expiresAt === 'number' && Number.isFinite(expiresAt) && expiresAt > 0
+
+      // 没有凭据的账号（AutoClaw 空壳）先说这件事，比"未知"更具体。
+      // ⚠️ 快照里没有 `hasCredential` 字段，用 `accountKey` 判断 ——
+      // 它们在同一次扫描里同源：有凭据才会写入 accountKey。
+      if (isAuto === true && account && typeof account.accountKey === 'string' && account.accountKey.length === 0) {
+        return h('span', { className: 'tap-muted', key: 'cred' }, '无凭据')
+      }
+
+      if (!valid) {
+        return h('span', { className: 'tap-muted', key: 'cred', title: 'token 里解不出 exp，无法判断剩余时间' }, '凭据有效期未知')
+      }
+
+      var remainingMs = expiresAt - Date.now()
+      if (remainingMs <= 0) {
+        return h('span', {
+          className: 'tap-tag tap-err',
+          key: 'cred',
+          title: '有效期 ' + timeText(expiresAt) + ' —— 需要重新登录',
+        }, '凭据已过期')
+      }
+
+      var days = Math.floor(remainingMs / 86400000)
+      if (days < 2) {
+        return h('span', {
+          className: 'tap-tag tap-err',
+          key: 'cred',
+          title: '有效期 ' + timeText(expiresAt),
+        }, days === 0 ? '凭据今天过期' : '凭据 ' + days + ' 天后过期')
+      }
+      if (days < 7) {
+        return h('span', {
+          className: 'tap-tag',
+          key: 'cred',
+          title: '有效期 ' + timeText(expiresAt),
+        }, '凭据 ' + days + ' 天后过期')
+      }
+      // 时间长了就只报日期，别天天提醒
+      var date = ''
+      try { date = new Date(expiresAt).toLocaleDateString() } catch (e) { date = timeText(expiresAt) }
+      return h('span', { className: 'tap-muted', key: 'cred', title: '有效期至 ' + timeText(expiresAt) }, '凭据 ' + date)
+    }
+
     /** 主组件：两个 Tab 共用一套交互。 */
     function Panel() {
       const [tab, setTab] = React.useState('teleagent')
@@ -119,13 +176,39 @@ window.__ModuleLoader__.load({
       const [notice, setNotice] = React.useState('')
       const [input, setInput] = React.useState('')
 
-      const load = React.useCallback(function () {
-        return call('state')
+      /**
+       * 载入状态。
+       *
+       * @param {{ refresh?: boolean }} [options]
+       *
+       * ⚠️ `refresh: true` 用于「刚打开面板」的场合：先拉一次状态让界面立刻有东西，
+       * 再**主动触发**服务端刷新余额 + 重新解凭据有效期，最后再拉一次。
+       * 只靠 `call('state')` 拿到的是**上次落盘的快照** —— 积分可能是几小时前的，
+       * 凭据可能已经过期了却还显示有效。用户打开面板想看的就是**现在**的数字。
+       */
+      const load = React.useCallback(function (options) {
+        const refresh = options !== undefined && options.refresh === true
+        const first = call('state')
           .then(function (payload) { setPools(payload.pools); setError(''); return payload })
-          .catch(function (failure) { setError(String(failure.message || failure)) })
+          .catch(function (failure) { setError(String(failure.message || failure)); return undefined })
+
+        if (!refresh) return first
+        // 全量刷新：两条并行走（两家号池互不牵连，一个失败不该拖住另一个）
+        return first.then(function (payload) {
+          if (payload === undefined) return payload
+          return Promise.all([
+            call('balance/refresh', { body: { pool: 'teleagent' }, timeout: 90000 }).catch(function () {}),
+            call('balance/refresh', { body: { pool: 'autoclaw' }, timeout: 90000 }).catch(function () {}),
+          ]).then(function () {
+            return call('state')
+              .then(function (fresh) { setPools(fresh.pools); return fresh })
+              .catch(function () { return payload })
+          })
+        })
       }, [])
 
-      React.useEffect(function () { load() }, [load])
+      // 进入面板即全量刷新（拿到最新的积分与凭据有效期）
+      React.useEffect(function () { load({ refresh: true }) }, [load])
 
       function run(label, action, body, successText) {
         setBusy(label)
@@ -371,8 +454,9 @@ window.__ModuleLoader__.load({
                       account.lastCheckinDay ? ('签到 ' + account.lastCheckinDay) : '未签到'),
                   isAuto
                     ? (account.accountKey ? h('span', { className: 'tap-badge', key: 'k' }, '本机凭据') : null)
-                    : h('span', { className: 'tap-muted', key: 'e' },
-                      '有效期 ' + (account.expiresAt ? timeText(account.expiresAt) : '未知')),
+                    : null,
+                  // 凭据有效期：两家号池都显示，且**过期就红字**
+                  credentialTag(account, isAuto),
                 ),
                 h('div', { className: 'tap-row' },
                   h('label', { className: 'tap-row', key: 'en' },
@@ -433,8 +517,17 @@ window.__ModuleLoader__.load({
 
       React.useEffect(function () {
         if (!open) return
-        // 面板一打开就拉一次，徽标才有数
+        // 展开即全量刷新：与设置页同一套做法（先拿快照，再刷余额，再拿一次）
         call('state')
+          .then(function (payload) { latest.current = payload.pools })
+          .catch(function () {})
+          .then(function () {
+            return Promise.all([
+              call('balance/refresh', { body: { pool: 'teleagent' }, timeout: 90000 }).catch(function () {}),
+              call('balance/refresh', { body: { pool: 'autoclaw' }, timeout: 90000 }).catch(function () {}),
+            ])
+          })
+          .then(function () { return call('state') })
           .then(function (payload) { latest.current = payload.pools })
           .catch(function () {})
       }, [open])

@@ -237,6 +237,8 @@ export class AutoClawPool {
         })
       }
       const id = account.id
+      // 凭据有效期：每次扫描都**重新解一遍**（token 会被客户端刷新，缓存会过期）
+      this.store.updateAccount(id, { expiresAt: row.expiresAt ?? null })
       if (row.hasCredential) {
         await this.writeTokens(id, row.token, row.refreshToken).catch((error) => {
           this.logger?.warn?.(`[autoclaw] 保存账号 ${id} 的 token 失败：${error?.message ?? String(error)}`)

@@ -88,6 +88,13 @@ export function sanitizeState(raw) {
       balanceAt: num(entry.balanceAt, 0),
       expiring: typeof entry.expiring === 'number' && Number.isFinite(entry.expiring) ? entry.expiring : null,
       expiringAt: num(entry.expiringAt, 0),
+      /**
+       * 凭据有效期（毫秒时间戳），从 token 的 JWT `exp` 解出。
+       *
+       * ⚠️ `null` 表示**解不出来**（不是"永久有效"）。界面必须显示「未知」，
+       * 不能当成有效 —— 编一个日期比不显示更糟。
+       */
+      expiresAt: typeof entry.expiresAt === 'number' && Number.isFinite(entry.expiresAt) ? entry.expiresAt : null,
       wallets: Array.isArray(entry.wallets)
         ? entry.wallets
           .filter((row) => typeof row === 'object' && row !== null)
@@ -172,6 +179,8 @@ export class AutoClawStore {
         balanceAt: account.balanceAt,
         expiring: account.expiring,
         expiringAt: account.expiringAt,
+        /** 凭据有效期；`null` = 解不出来（界面显示「未知」）。 */
+        expiresAt: account.expiresAt,
         wallets: [...account.wallets],
         lastError: account.lastError,
         lastErrorAt: account.lastErrorAt,
@@ -211,6 +220,7 @@ export class AutoClawStore {
       balanceAt: 0,
       expiring: null,
       expiringAt: 0,
+      expiresAt: fields.expiresAt ?? null,
       wallets: [],
       lastError: '',
       lastErrorAt: 0,
