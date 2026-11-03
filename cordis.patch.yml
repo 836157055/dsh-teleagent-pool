@@ -1,0 +1,8 @@
+# dsh-teleagent-pool bundle patch.
+#
+# 一行 insert 即挂载 Host 半身（provider 路由 + 账号池 + 每日自动签到 + 浏览器 API）；
+# 浏览器半身在 package.json 的 dsh.client 里声明，绑定在 name 为裸包名的这一行上。
+- insert:
+    - id: teleagent-pool
+      name: 'dsh-teleagent-pool'
+      config: {}

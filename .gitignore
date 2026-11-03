@@ -1,0 +1,26 @@
+# 依赖与构建产物
+node_modules/
+dist/
+build/
+*.tgz
+
+# 本地助手
+.vscode/
+.idea/
+*.swp
+*~
+
+# 日志与临时文件
+*.log
+npm-debug.log*
+.nyc_output/
+coverage/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 本插件运行时数据（绝不该提交：里面有账号凭据与 token）
+teleagent-pool/
+*.credentials.json
