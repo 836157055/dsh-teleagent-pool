@@ -1,6 +1,9 @@
 # dsh-teleagent-pool
 
-把**两个** AI 号池接进 DeepSeek Harness，设置页与**左侧边栏**都能打开面板，用 **Tab 切换**各自管理：
+把**两个** AI 号池接进 DeepSeek Harness。入口有两处：**侧栏「插件」下方**的「AI 号池」导航项（点开在主区显示完整面板），以及 Harness 设置的「AI 号池（电信 / 智谱）」分区。面板内用 **Tab 切换**两个号池各自管理：
+
+> 侧栏那一行靠 `sidebar.panellist` 注册、页面靠 `main` + `key` 绑定（两处 id 必须一致）。
+> 这是 `dshmarket` 同款做法；`sidebar.footer.action` 是**底部**那一排，不是导航列表。
 
 | Tab | 产品 | 登录方式 | 积分 | 每日签到 | 推理 |
 |---|---|---|---|---|---|

@@ -112,15 +112,15 @@ test('bundle 执行期只注册 factory，不访问 DOM / React（否则 script 
   assert.doesNotThrow(() => vm.runInNewContext(SOURCE, strict))
 })
 
-test('materialize 后导出 apply + inject；inject **只**声明 slots', () => {
+test('materialize 后导出 apply + inject；inject 声明 slots 与 layout', () => {
   const env = browserEnv()
   vm.runInNewContext(SOURCE, env.sandbox)
   const factory = env.handlers.get('dsh-teleagent-pool')
   const exports = factory(makeRequire())
   assert.equal(typeof exports.apply, 'function')
-  // ⚠️ 多声明一个服务 = 该服务缺席时本 fiber 永久 pending = 设置页永不注册。
-  // 跨 realm 的数组原型不同：比较值而不是引用。
-  assert.equal(JSON.stringify(Array.from(exports.inject)), JSON.stringify(['slots']))
+  // `slots` 决定能不能挂面板，`layout` 决定侧栏那一行点了能不能切过去。
+  // 两者都是侧栏导航的硬需求；跨 realm 的数组原型不同，比较值不比引用。
+  assert.equal(JSON.stringify(Array.from(exports.inject)), JSON.stringify(['slots', 'layout']))
 })
 
 test('apply 把设置页注册到 settings.section，label 可用', () => {
@@ -141,9 +141,9 @@ test('apply 把设置页注册到 settings.section，label 可用', () => {
 
   exports.apply({ get: (service) => (service === 'slots' ? slots : undefined) })
 
-  // 两个 slot：设置页一段 + 左栏一个入口
-  assert.deepEqual(slots.injected.sort(), ['settings.section', 'sidebar.footer.action'])
-  assert.equal(registered.length, 2)
+  // 三个 slot：设置页一段 + 侧栏那一行 + 主区那个页面
+  assert.deepEqual(slots.injected.sort(), ['main', 'settings.section', 'sidebar.panellist'])
+  assert.equal(registered.length, 3)
 
   const section = registered.find((row) => row.options.name === 'settings.section')
   assert.ok(section !== undefined, '应注册 settings.section')
@@ -154,11 +154,18 @@ test('apply 把设置页注册到 settings.section，label 可用', () => {
   assert.match(section.options.label(), /智谱/u)
   assert.equal(typeof section.component, 'function')
 
-  // ⚠️ 号池是日常入口，不能只藏在设置里 —— 左栏必须有一个按钮
-  const entry = registered.find((row) => row.options.name === 'sidebar.footer.action')
-  assert.ok(entry !== undefined, '应注册 sidebar.footer.action（左栏入口）')
-  assert.equal(entry.options.id, 'teleagent-pool-entry')
-  assert.equal(typeof entry.component, 'function')
+  // ⚠️ 号池是日常入口，不能只藏在设置里 —— 侧栏要有导航项（显示在「插件」下方）
+  const row = registered.find((row) => row.options.name === 'sidebar.panellist')
+  assert.ok(row !== undefined, '应注册 sidebar.panellist（侧栏导航项）')
+  assert.match(row.options.label(), /号池/u)
+  assert.equal(typeof row.component, 'function')
+
+  // ⚠️⚠️ 页面用 `main` + `key` 绑定，`key` 必须与导航项的 `id` **完全一致**，
+  // 否则点了打不开，或者页面根本挂不上。
+  const page = registered.find((row) => row.options.name === 'main')
+  assert.ok(page !== undefined, '应注册 main（页面本体）')
+  assert.equal(page.options.key, row.options.id, 'main.key 必须等于 sidebar.panellist.id')
+  assert.equal(typeof page.component, 'function')
 
   // 样式一次性注入，并打上 plugin 标（HMR 回收靠它）
   assert.equal(env.styleTags.length, 1)
@@ -188,20 +195,23 @@ test('面板组件能渲染（React 替身跑一遍，确保没有 hooks 顺序/
   vm.runInNewContext(SOURCE, env.sandbox)
   const exports = env.handlers.get('dsh-teleagent-pool')(makeRequire())
 
-  // 现在注册两个 slot：先拿到 settings.section 的那个 Panel（它才是完整面板）
+  // 现在注册三个 slot：拿到 settings.section 的 Panel 与侧栏 page
   let panel
-  let entry
+  let row
+  let page
   const slots = {
     inject: (_name, callback) => callback(),
     register: (options, element) => {
       if (options.name === 'settings.section') panel = element
-      else if (options.name === 'sidebar.footer.action') entry = element
+      else if (options.name === 'sidebar.panellist') row = element
+      else if (options.name === 'main') page = element
       return () => {}
     },
   }
   exports.apply({ get: () => slots })
   assert.equal(typeof panel, 'function', '应拿到 settings.section 的组件')
-  assert.equal(typeof entry, 'function', '应拿到 sidebar.footer.action 的组件')
+  assert.equal(typeof row, 'function', '应拿到 sidebar.panellist 的组件')
+  assert.equal(typeof page, 'function', '应拿到 main 的组件')
 
   const tree = panel()
   assert.equal(tree.type, 'div')

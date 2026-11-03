@@ -31,7 +31,16 @@ window.__ModuleLoader__.load({
 
     var API = '/api/teleagent-pool'
     /** 只声明 `slots`：多写一个服务 = 该服务缺席时本 fiber 永久 pending。 */
-    var inject = ['slots']
+    /**
+     * 硬依赖。
+     *
+     * ⚠️ 只列**必需**的：`slots` 决定能不能挂面板，`layout` 决定点侧栏那一行能不能切过去。
+     * `layout` 缺失时降级为「只挂设置页」，不能让整块插件因为一个可选服务而不加载。
+     */
+    var inject = ['slots', 'layout']
+
+    /** 侧栏面板的稳定 id（`sidebar.panellist` 的 id 与 `main` 的 key 必须是同一个）。 */
+    var PANEL_ID = 'dsh-teleagent-pool'
 
     var POOLS = [
       { id: 'teleagent', label: 'TeleAgent (电信)', hint: '需要手工取一次 token' },
@@ -511,59 +520,42 @@ window.__ModuleLoader__.load({
      * （同一套 `slots.register({ name, id, order, inject })` 约定）。
      * 点它 → 打开设置页并定位到号池那一段。
      */
-    function SidebarEntry() {
-      var [open, setOpen] = React.useState(false)
-      var latest = React.useRef(null)
+    /**
+     * 侧栏那一行（图标 + 文字），显示在「插件」下方。
+     *
+     * ## 机制（从 `dshmarket` 的源码抄来的正式做法）
+     *
+     * 侧栏导航**不是**往 `sidebar.workspaces` 里塞按钮，而是成对注册：
+     * ```js
+     * // ① 这一行：看板列表用 sidebar.panellist
+     * slots.register({ name: 'sidebar.panellist', id: PANEL_ID, order, label }, IconRow)
+     * // ② 那个页面：点开后在主区显示，用 main + key 绑定同一个 id
+     * slots.register({ name: 'main', key: PANEL_ID, inject }, Page)
+     * ```
+     * 两者 `id` / `key` **必须是同一个字符串**，否则点了打不开或者页面挂不上。
+     *
+     * 切换靠 `layout` 服务（`ctx.inject(['layout'])`），本组件只负责"长什么样"。
+     */
+    function SidebarRow(props) {
+      var size = (props && props.size) || 16
+      // 用一个鱼形/池子意向的极简图形，跟着主题色走
+      return h('span', {
+        className: 'tap-rail',
+        style: { width: size + 'px', height: size + 'px', display: 'inline-flex' },
+        title: 'AI 号池',
+      }, h('span', { style: { fontSize: Math.max(13, size) + 'px', lineHeight: 1 } }, '🐟'))
+    }
 
-      React.useEffect(function () {
-        if (!open) return
-        // 展开即全量刷新：与设置页同一套做法（先拿快照，再刷余额，再拿一次）
-        call('state')
-          .then(function (payload) { latest.current = payload.pools })
-          .catch(function () {})
-          .then(function () {
-            return Promise.all([
-              call('balance/refresh', { body: { pool: 'teleagent' }, timeout: 90000 }).catch(function () {}),
-              call('balance/refresh', { body: { pool: 'autoclaw' }, timeout: 90000 }).catch(function () {}),
-            ])
-          })
-          .then(function () { return call('state') })
-          .then(function (payload) { latest.current = payload.pools })
-          .catch(function () {})
-      }, [open])
-
-      var total = 0
-      var pools = latest.current
-      if (pools !== null && pools !== undefined) {
-        for (const key of ['teleagent', 'autoclaw']) {
-          const accounts = (pools[key] && pools[key].accounts) || []
-          for (const account of accounts) {
-            if (typeof account.balance === 'number') total += account.balance
-          }
-        }
-      }
-
-      return h('div', { className: 'tap-root' }, [
-        h('button', {
-          key: 'btn',
-          className: 'tap-btn',
-          title: '打开 AI 号池面板（积分 / 切号 / 签到）',
-          onClick: function () {
-            setOpen(function (value) { return !value })
-            // 点一下就把设置页那段滚到眼前（下面 Panel 里有 id）
-            try {
-              const target = document.getElementById('dsh-teleagent-pool-anchor')
-              if (target !== null) target.scrollIntoView({ block: 'start', behavior: 'smooth' })
-            } catch (ignored) {}
-          },
-        }, [
-          h('span', { key: 't' }, '号池'),
-          typeof total === 'number' && total > 0
-            ? h('span', { key: 'b', className: 'tap-badge', style: { marginLeft: '6px' } }, String(Math.round(total)))
-            : null,
-        ]),
-        open ? h('div', { key: 'panel', className: 'tap-card' }, Panel()) : null,
-      ])
+    /**
+     * 主区页面（点侧栏那一行后显示）。
+     *
+     * ⚠️ 这里**直接渲染 `Panel`**，不要用 `Panel()` 函数式调用 ——
+     * 那样它的 hooks 会挂到调用者的 hook 链上，轻则顺序错乱，
+     * 重则抛错被 slot 当成 crash 举报并**永久剔除**（那就再也显示不出来了）。
+     */
+    function SidebarPage() {
+      return h('div', { className: 'tap-root', style: { padding: '16px 18px' } },
+        h(Panel, null))
     }
 
     function apply(ctx) {
@@ -575,6 +567,8 @@ window.__ModuleLoader__.load({
       try {
         var slots = ctx.get ? ctx.get('slots') : ctx.slots
         if (slots === undefined || slots === null || typeof slots.inject !== 'function') return
+
+        // ① 设置页那一段（一直都在）
         slots.inject('settings.section', function () {
           return slots.register({
             name: 'settings.section',
@@ -584,13 +578,22 @@ window.__ModuleLoader__.load({
           }, Panel)
         })
 
-        // 左栏入口：失败不该影响设置页（两个 slot 互不牵连）
-        slots.inject('sidebar.footer.action', function () {
+        // ② 侧栏那一行：「插件」下方的导航项
+        slots.inject('sidebar.panellist', function () {
           return slots.register({
-            name: 'sidebar.footer.action',
-            id: 'teleagent-pool-entry',
-            order: 0,
-          }, SidebarEntry)
+            name: 'sidebar.panellist',
+            id: PANEL_ID,
+            order: 1,
+            label: function () { return 'AI 号池' },
+          }, SidebarRow)
+        })
+
+        // ③ 那个页面的本体（点开后显示）
+        slots.inject('main', function () {
+          return slots.register({
+            name: 'main',
+            key: PANEL_ID,
+          }, SidebarPage)
         })
       } catch (error) {
         // slot 是别人家的：挂坏了不该让整个面板白屏。
